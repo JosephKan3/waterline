@@ -1,0 +1,310 @@
+-- Waterline Tier Controller
+-- Monitors AE2 network and activates tier-based redstone controls
+-- Control 0 activates with the highest active tier (1-8)
+
+local component = require("component")
+local event = require("event")
+local term = require("term")
+local gpu = component.gpu
+local filesystem = require("filesystem")
+
+-- Load configurations
+local tiersConfig = require("tiers_config")
+local redstoneConfig = require("redstone_config")
+local ae2 = require("src.AE2")
+
+-- Constants
+local REDSTONE_ON = 15
+local REDSTONE_OFF = 0
+local CHECK_INTERVAL = redstoneConfig.check_interval or 120
+
+-- State tracking
+local tierStates = {} -- Current on/off state for each tier
+local redstoneProxies = {} -- Cached redstone component proxies
+
+-- Colors for display
+local COLOR_GREEN = 0x00FF00
+local COLOR_RED = 0xFF0000
+local COLOR_YELLOW = 0xFFFF00
+local COLOR_GRAY = 0x808080
+local COLOR_WHITE = 0xFFFFFF
+
+-- Initialize AE2 module
+local function initAE2()
+    local success, err = pcall(function()
+        ae2.init(redstoneConfig.me_interface)
+    end)
+    if not success then
+        print("ERROR: " .. tostring(err))
+        return false
+    end
+    return true
+end
+
+-- Get or create redstone component proxy
+local function getRedstoneProxy(address)
+    if not address then return nil end
+
+    if redstoneProxies[address] then
+        return redstoneProxies[address]
+    end
+
+    local success, proxy = pcall(component.proxy, address)
+    if success and proxy then
+        redstoneProxies[address] = proxy
+        return proxy
+    end
+
+    return nil
+end
+
+-- Set redstone output for a tier
+local function setRedstoneOutput(tierNum, value)
+    local tierConfig = redstoneConfig.tiers[tierNum]
+    if not tierConfig then return false end
+
+    local proxy = getRedstoneProxy(tierConfig.address)
+    if not proxy then
+        print(string.format("Warning: Could not access redstone for tier %d", tierNum))
+        return false
+    end
+
+    local success, err = pcall(function()
+        proxy.setOutput(tierConfig.side, value)
+    end)
+
+    if not success then
+        print(string.format("Error setting redstone for tier %d: %s", tierNum, tostring(err)))
+        return false
+    end
+
+    return true
+end
+
+-- Get real time from filesystem
+local function getRealTime()
+    local tempfile = "/tmp/waterline_timefile"
+    local file = filesystem.open(tempfile, "a")
+    if file then
+        file:close()
+        local timestamp = filesystem.lastModified(tempfile) / 1000
+        filesystem.remove(tempfile)
+        return timestamp
+    else
+        return os.time()
+    end
+end
+
+-- Format time for display
+local function getFormattedTime()
+    local timestamp = getRealTime()
+    local timetable = os.date("*t", timestamp)
+
+    local hour = timetable.hour
+    local min = timetable.min
+    local sec = timetable.sec
+
+    if min < 10 then min = "0" .. min end
+    if sec < 10 then sec = "0" .. sec end
+
+    return hour .. ":" .. min .. ":" .. sec
+end
+
+-- Print with color
+local function printColored(text, color)
+    local old = gpu.getForeground()
+    if color then gpu.setForeground(color) end
+    print(text)
+    gpu.setForeground(old)
+end
+
+-- Print timestamped log
+local function log(text, color)
+    local old = gpu.getForeground()
+    io.write("[" .. getFormattedTime() .. "] ")
+    if color then gpu.setForeground(color) end
+    print(text)
+    gpu.setForeground(old)
+end
+
+-- Check a single tier's requirements
+local function checkTier(tierNum)
+    local requirements = tiersConfig[tierNum]
+    if not requirements or #requirements == 0 then
+        return false, nil
+    end
+
+    local allMet, results = ae2.checkTierRequirements(requirements)
+    return allMet, results
+end
+
+-- Main check and update cycle
+local function updateTiers()
+    local highestActiveTier = 0
+    local tierResults = {}
+
+    -- Check each tier (1-8)
+    for tierNum = 1, 8 do
+        local met, results = checkTier(tierNum)
+        tierResults[tierNum] = {
+            met = met,
+            results = results
+        }
+
+        local tierConfig = redstoneConfig.tiers[tierNum]
+
+        if met then
+            highestActiveTier = tierNum
+            -- Activate this tier
+            if tierConfig then
+                setRedstoneOutput(tierNum, REDSTONE_ON)
+            end
+            tierStates[tierNum] = true
+        else
+            -- Deactivate this tier
+            if tierConfig then
+                setRedstoneOutput(tierNum, REDSTONE_OFF)
+            end
+            tierStates[tierNum] = false
+        end
+    end
+
+    -- Update control 0 (main controller) - activates if any tier is active
+    local control0Config = redstoneConfig.tiers[0]
+    if control0Config then
+        if highestActiveTier > 0 then
+            setRedstoneOutput(0, REDSTONE_ON)
+            tierStates[0] = true
+        else
+            setRedstoneOutput(0, REDSTONE_OFF)
+            tierStates[0] = false
+        end
+    end
+
+    return highestActiveTier, tierResults
+end
+
+-- Display status
+local function displayStatus(highestTier, tierResults)
+    term.clear()
+    term.setCursor(1, 1)
+
+    printColored("=== Waterline Tier Controller ===", COLOR_WHITE)
+    print(string.format("Check Interval: %d seconds | Press Q to exit", CHECK_INTERVAL))
+    print("")
+
+    -- Control 0 status
+    local ctrl0Status = tierStates[0] and "ON" or "OFF"
+    local ctrl0Color = tierStates[0] and COLOR_GREEN or COLOR_GRAY
+    log(string.format("Control 0 (Main): %s (Highest: Tier %d)", ctrl0Status, highestTier), ctrl0Color)
+    print("")
+
+    -- Display each tier
+    for tierNum = 1, 8 do
+        local tierConfig = redstoneConfig.tiers[tierNum]
+        local result = tierResults[tierNum]
+
+        if not tierConfig then
+            log(string.format("Tier %d: Not configured", tierNum), COLOR_GRAY)
+        elseif not result or not result.results then
+            log(string.format("Tier %d: No requirements defined", tierNum), COLOR_GRAY)
+        else
+            local statusText = result.met and "ACTIVE" or "WAITING"
+            local statusColor = result.met and COLOR_GREEN or COLOR_YELLOW
+
+            log(string.format("Tier %d: %s", tierNum, statusText), statusColor)
+
+            -- Show individual requirements
+            for _, req in ipairs(result.results) do
+                local reqColor = req.met and COLOR_GREEN or COLOR_RED
+                local currentStr = ae2.formatNumber(req.current)
+                local requiredStr = ae2.formatNumber(req.required)
+                local icon = req.met and "[OK]" or "[!!]"
+
+                local old = gpu.getForeground()
+                io.write("         ")
+                gpu.setForeground(reqColor)
+                io.write(icon .. " ")
+                gpu.setForeground(COLOR_WHITE)
+                print(string.format("%s: %s / %s (%s)",
+                    req.name, currentStr, requiredStr, req.type))
+                gpu.setForeground(old)
+            end
+        end
+    end
+
+    print("")
+    log("Next check in " .. CHECK_INTERVAL .. " seconds...", COLOR_GRAY)
+end
+
+-- Shutdown - turn off all redstone outputs
+local function shutdown()
+    print("\nShutting down...")
+    for tierNum = 0, 8 do
+        local tierConfig = redstoneConfig.tiers[tierNum]
+        if tierConfig then
+            setRedstoneOutput(tierNum, REDSTONE_OFF)
+        end
+    end
+    print("All redstone outputs disabled.")
+end
+
+-- Main loop
+local function main()
+    term.clear()
+    term.setCursor(1, 1)
+
+    print("=== Waterline Tier Controller ===")
+    print("Initializing...")
+
+    -- Initialize AE2
+    if not initAE2() then
+        print("Failed to initialize AE2 module. Exiting.")
+        return
+    end
+    print("AE2 connection established.")
+
+    -- Validate redstone config
+    local configuredTiers = 0
+    for tierNum = 0, 8 do
+        if redstoneConfig.tiers[tierNum] then
+            configuredTiers = configuredTiers + 1
+        end
+    end
+    print(string.format("Configured tiers: %d", configuredTiers))
+
+    if configuredTiers == 0 then
+        print("WARNING: No tiers configured! Run setup.lua first.")
+    end
+
+    os.sleep(2)
+
+    -- Main loop
+    while true do
+        local success, err = pcall(function()
+            local highestTier, results = updateTiers()
+            displayStatus(highestTier, results)
+        end)
+
+        if not success then
+            log("Error during update: " .. tostring(err), COLOR_RED)
+        end
+
+        -- Wait for interval or Q key
+        local eventType, _, _, code = event.pull(CHECK_INTERVAL, "key_down")
+        if eventType == "key_down" and code == 0x10 then -- Q key
+            shutdown()
+            term.clear()
+            term.setCursor(1, 1)
+            print("Waterline Tier Controller stopped.")
+            return
+        end
+    end
+end
+
+-- Run with error handling
+local success, err = pcall(main)
+if not success then
+    print("Fatal error: " .. tostring(err))
+    shutdown()
+end
