@@ -1,11 +1,102 @@
 -- Waterline Tier Controller Setup
--- Configures redstone I/O blocks and sides for each tier control
+-- Downloads files from GitHub and configures redstone I/O blocks
 
 local fs = require("filesystem")
+local shell = require("shell")
+local internet = require("internet")
+local json = require("json")
 local component = require("component")
 local term = require("term")
 
+local args = {...}
+local branch = args[1] or "main"
+local repo = args[2] or "JosephKan3/waterline"
+
 local CONFIG_FILE = "redstone_config.lua"
+local TIERS_CONFIG_FILE = "tiers_config.lua"
+
+-- ============================================
+-- GitHub Download Functions
+-- ============================================
+
+local function getFileList(repository, branchName)
+    local url = string.format("https://api.github.com/repos/%s/contents/?ref=%s", repository, branchName)
+    local handle = internet.request(url)
+    if not handle then
+        error("HTTP request failed")
+    end
+
+    local data = ""
+    for chunk in handle do data = data .. chunk end
+    return json.decode(data)
+end
+
+local function downloadFiles()
+    print("\n=== Downloading Waterline Files ===")
+
+    -- Preserve existing configs
+    local preserveRedstoneConfig = fs.exists(CONFIG_FILE)
+    local preserveTiersConfig = fs.exists(TIERS_CONFIG_FILE)
+
+    if preserveRedstoneConfig then
+        print("Preserving existing " .. CONFIG_FILE)
+        shell.execute("cp " .. CONFIG_FILE .. " " .. CONFIG_FILE .. ".bak")
+    end
+    if preserveTiersConfig then
+        print("Preserving existing " .. TIERS_CONFIG_FILE)
+        shell.execute("cp " .. TIERS_CONFIG_FILE .. " " .. TIERS_CONFIG_FILE .. ".bak")
+    end
+
+
+    -- Create directories
+    dirs = { "src" }
+    for _, dir in ipairs(dirs) do
+        local path = shell.getWorkingDirectory() .. "/" .. dir
+        if not fs.exists(path) then
+            fs.makeDirectory(path)
+        end
+    end
+
+    print("Fetching file list from repository...")
+    local files = getFileList(repo, branch)
+
+    -- Download root lua files
+    for _, file in ipairs(files) do
+        if file.type == "file" and file.name:match("%.lua$") then
+            -- Skip config files if they exist
+            if (file.name == CONFIG_FILE and preserveRedstoneConfig) or
+               (file.name == TIERS_CONFIG_FILE and preserveTiersConfig) then
+                print("Skipping " .. file.name .. " (preserving local copy)")
+            else
+                print("Downloading " .. file.name)
+                shell.execute(string.format(
+                    "wget -f https://raw.githubusercontent.com/%s/%s/%s",
+                    repo, branch, file.path
+                ))
+            end
+        end
+    end
+
+    print("Downloading src/AE2.lua")
+    shell.execute(string.format(
+        "wget -f https://raw.githubusercontent.com/%s/%s/src/AE2.lua src/AE2.lua",
+        repo, branch
+    ))
+
+    -- Restore configs if preserved
+    if preserveRedstoneConfig then
+        shell.execute("mv " .. CONFIG_FILE .. ".bak " .. CONFIG_FILE)
+    end
+    if preserveTiersConfig then
+        shell.execute("mv " .. TIERS_CONFIG_FILE .. ".bak " .. TIERS_CONFIG_FILE)
+    end
+
+    print("\nFiles downloaded successfully!")
+end
+
+-- ============================================
+-- Configuration Functions
+-- ============================================
 
 local function clearScreen()
     term.clear()
@@ -102,7 +193,7 @@ local function promptForTier(tierNum, addresses)
     end
 
     -- Prompt for side
-    print("Sides: bottom(0), top(1), back(2), front(3), right(4), left(5)")
+    print("Sides: bottom(0), top(1), north(2), south(3), west(4), east(5)")
     io.write("Enter output side (name or number): ")
     local sideInput = io.read()
 
@@ -113,7 +204,7 @@ local function promptForTier(tierNum, addresses)
     else
         side = getSideNumber(sideInput)
         if not side then
-            print("Invalid side. Defaulting to 'front' (3).")
+            print("Invalid side. Defaulting to 'south' (3).")
             side = 3
         end
     end
@@ -183,7 +274,7 @@ local function saveConfig(config)
     -- Tier configurations
     file:write("-- Tier redstone outputs\n")
     file:write("-- Format: { address = \"...\", side = N }\n")
-    file:write("-- Sides: bottom=0, top=1, back=2, front=3, right=4, left=5\n")
+    file:write("-- Sides: bottom=0, top=1, north=2, south=3, west=4, east=5\n")
     file:write("config.tiers = {\n")
 
     for i = 0, 8 do
@@ -209,14 +300,14 @@ local function loadExistingConfig()
         return nil
     end
 
-    local success, config = pcall(require, CONFIG_FILE:gsub("%.lua$", ""))
+    local success, config = pcall(dofile, CONFIG_FILE)
     if success then
         return config
     end
     return nil
 end
 
-local function main()
+local function setupHardware()
     clearScreen()
     printHeader()
 
@@ -226,7 +317,7 @@ local function main()
         io.write("Existing configuration found. Reconfigure? (y/n): ")
         local response = io.read()
         if response:lower() ~= "y" then
-            print("Setup cancelled.")
+            print("Hardware setup cancelled.")
             return
         end
     end
@@ -295,10 +386,37 @@ local function main()
 
     if confirm:lower() == "y" then
         saveConfig(config)
-        print("\nSetup complete! Run 'controller.lua' to start the tier controller.")
+        print("\nHardware setup complete!")
     else
         print("Configuration not saved.")
     end
+end
+
+-- ============================================
+-- Main
+-- ============================================
+
+local function main()
+    clearScreen()
+    printHeader()
+
+    -- Download files from GitHub
+    downloadFiles()
+
+    -- Setup hardware
+    print("")
+    io.write("Configure hardware now? (y/n): ")
+    local response = io.read()
+
+    if response:lower() == "y" then
+        setupHardware()
+    else
+        print("\nRun 'setup' again to configure hardware later.")
+    end
+
+    print("\n=== Setup Complete ===")
+    print("1. Edit 'tiers_config.lua' to set material requirements for each tier")
+    print("2. Run 'controller' to start the tier controller")
 end
 
 main()
