@@ -11,52 +11,60 @@
 -- Use the exact label name as shown in AE2.
 
 local tiers = {}
+local number_of_parallels = 16
 
--- Tier 1: Basic Water Processing
+-- Tier 1
 tiers[1] = {
-    { name = "Water", amount = 10000, type = "fluid" },
+    { name = "Water", amount = 1000, type = "fluid", parallel = true },
+    { name = "Activated Carbon Filter Mesh", amount = 1, type = "item" },
 }
 
--- Tier 2: Grade 1 Processing
+-- Tier 2
 tiers[2] = {
-    { name = "Filtered Water (Grade 1)", amount = 5000, type = "fluid" },
-    { name = "Ozone", amount = 1000, type = "fluid" },
+    { name = "Filtered Water (Grade 1)", amount = 1000, type = "fluid", parallel = true },
+    { name = "Ozone", amount = 1024000, type = "fluid" },
 }
 
--- Tier 3: Grade 2 Processing
+-- Tier 3
 tiers[3] = {
-    { name = "Filtered Water (Grade 2)", amount = 5000, type = "fluid" },
-    -- Add more requirements here
+    { name = "Ozonated Water (Grade 2)", amount = 1000, type = "fluid", parallel = true },
+    { name = "Polyaluminium Chloride", amount = 1000000, type = "fluid" },
 }
 
--- Tier 4: Grade 3 Processing
+-- Tier 4
 tiers[4] = {
-    { name = "Filtered Water (Grade 3)", amount = 5000, type = "fluid" },
-    -- Add more requirements here
+    { name = "Flocculated Water (Grade 3)", amount = 1000, type = "fluid", parallel = true },
+    { name = "BLOCKER", amount = 1, type = "item" },
 }
 
--- Tier 5: Grade 4 Processing
+-- Tier 5
 tiers[5] = {
-    { name = "Filtered Water (Grade 4)", amount = 5000, type = "fluid" },
-    -- Add more requirements here
+    { name = "pH Neutralized Water (Grade 4)", amount = 1000, type = "fluid", parallel = true },
 }
 
--- Tier 6: Grade 5 Processing
+-- Tier 6
 tiers[6] = {
-    { name = "Filtered Water (Grade 5)", amount = 5000, type = "fluid" },
-    -- Add more requirements here
+    { name = "Extreme-Temperature Treated Water (Grade 5)", amount = 1000, type = "fluid", parallel = true },
 }
 
--- Tier 7: Grade 6 Processing
+-- Tier 7
 tiers[7] = {
-    { name = "Filtered Water (Grade 6)", amount = 5000, type = "fluid" },
-    -- Add more requirements here
+    { name = "Ultraviolet Treated Electrically Neutral Water (Grade 6)", amount = 1000, type = "fluid", parallel = true },
 }
 
--- Tier 8: Final Processing
+-- Tier 8
 tiers[8] = {
-    { name = "Filtered Water (Grade 7)", amount = 5000, type = "fluid" },
-    -- Add more requirements here
+    { name = "Degassed Decontaminant-Free Water (Grade 7)", amount = 1000, type = "fluid", parallel = true },
 }
+
+
+-- Adjust amounts for parallel processing
+for tier, requirements in pairs(tiers) do
+    for _, req in ipairs(requirements) do
+        if req.parallel then
+            req.amount = req.amount * number_of_parallels
+        end
+    end
+end
 
 return tiers
