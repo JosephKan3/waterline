@@ -336,18 +336,25 @@ local function main()
             log("Error during update: " .. tostring(err), COLOR_RED)
         end
 
-        -- Countdown loop
-        for remaining = CHECK_INTERVAL, 1, -1 do
+        -- Countdown loop using real time
+        local endTime = computer.uptime() + CHECK_INTERVAL
+        while true do
+            local remaining = math.ceil(endTime - computer.uptime())
+            if remaining <= 0 then break end
+
             displayCountdown(remaining)
 
-            -- Wait 1 second or check for Q key
-            local eventType, _, _, code = event.pull(1, "key_down")
-            if eventType == "key_down" and code == 0x10 then -- Q key
-                shutdown()
-                term.clear()
-                term.setCursor(1, 1)
-                print("Waterline Tier Controller stopped.")
-                return
+            -- Wait up to 1 second or until next whole second boundary
+            local waitTime = math.min(1, endTime - computer.uptime())
+            if waitTime > 0 then
+                local eventType, _, _, code = event.pull(waitTime, "key_down")
+                if eventType == "key_down" and code == 0x10 then -- Q key
+                    shutdown()
+                    term.clear()
+                    term.setCursor(1, 1)
+                    print("Waterline Tier Controller stopped.")
+                    return
+                end
             end
         end
     end
