@@ -149,9 +149,8 @@ end
 local function updateTiers()
     local highestActiveTier = 0
     local tierResults = {}
-    local tiersToActivate = {}
 
-    -- Check each tier (1-8)
+    -- Check each tier (1-8) to find the highest ready tier
     for tierNum = 1, 8 do
         local met, results = checkTier(tierNum)
         tierResults[tierNum] = {
@@ -162,37 +161,36 @@ local function updateTiers()
         if met then
             highestActiveTier = tierNum
             tierStates[tierNum] = true
-            local tierConfig = redstoneConfig.tiers[tierNum]
-            if tierConfig then
-                table.insert(tiersToActivate, tierNum)
-            end
         else
             tierStates[tierNum] = false
         end
     end
 
-    -- Check control 0 (main controller) - activates if any tier is active
-    local control0Config = redstoneConfig.tiers[0]
-    if control0Config and highestActiveTier > 0 then
-        tierStates[0] = true
-        table.insert(tiersToActivate, 0)
-    else
-        tierStates[0] = false
-    end
+    -- Update control 0 state
+    tierStates[0] = highestActiveTier > 0
 
-    -- Pulse redstone: turn ON, wait 1 second, turn OFF
-    if #tiersToActivate > 0 then
-        -- Turn on all active tiers
-        for _, tierNum in ipairs(tiersToActivate) do
-            setRedstoneOutput(tierNum, REDSTONE_ON)
+    -- Pulse redstone: only activate highest tier + tier 0
+    if highestActiveTier > 0 then
+        local tierConfig = redstoneConfig.tiers[highestActiveTier]
+        local control0Config = redstoneConfig.tiers[0]
+
+        -- Turn ON highest tier and tier 0
+        if tierConfig then
+            setRedstoneOutput(highestActiveTier, REDSTONE_ON)
+        end
+        if control0Config then
+            setRedstoneOutput(0, REDSTONE_ON)
         end
 
         -- Wait for pulse duration
         os.sleep(PULSE_DURATION)
 
-        -- Turn off all tiers
-        for _, tierNum in ipairs(tiersToActivate) do
-            setRedstoneOutput(tierNum, REDSTONE_OFF)
+        -- Turn OFF
+        if tierConfig then
+            setRedstoneOutput(highestActiveTier, REDSTONE_OFF)
+        end
+        if control0Config then
+            setRedstoneOutput(0, REDSTONE_OFF)
         end
     end
 
