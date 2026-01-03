@@ -1,12 +1,18 @@
 -- Waterline Tier Controller
 -- Monitors AE2 network and activates tier-based redstone controls
 -- Control 0 activates with the highest active tier (1-8)
+-- Usage: controller [debug]
 
 local component = require("component")
 local event = require("event")
 local term = require("term")
+local shell = require("shell")
 local gpu = component.gpu
 local filesystem = require("filesystem")
+
+-- Parse arguments
+local args = {...}
+local DEBUG_MODE = args[1] == "debug"
 
 -- Load configurations
 local tiersConfig = require("tiers_config")
@@ -16,7 +22,7 @@ local ae2 = require("src.AE2")
 -- Constants
 local REDSTONE_ON = 15
 local REDSTONE_OFF = 0
-local CHECK_INTERVAL = redstoneConfig.check_interval or 120
+local CHECK_INTERVAL = DEBUG_MODE and 5 or (redstoneConfig.check_interval or 120)
 local PULSE_DURATION = 1 -- seconds
 
 -- State tracking
@@ -198,7 +204,11 @@ local function displayStatus(highestTier, tierResults)
     term.clear()
     term.setCursor(1, 1)
 
-    printColored("=== Waterline Tier Controller ===", COLOR_WHITE)
+    local title = "=== Waterline Tier Controller ==="
+    if DEBUG_MODE then
+        title = "=== Waterline Tier Controller [DEBUG] ==="
+    end
+    printColored(title, COLOR_WHITE)
     print(string.format("Check Interval: %d seconds | Press Q to exit", CHECK_INTERVAL))
     print("")
 
