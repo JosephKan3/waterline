@@ -17,6 +17,7 @@ local ae2 = require("src.AE2")
 local REDSTONE_ON = 15
 local REDSTONE_OFF = 0
 local CHECK_INTERVAL = redstoneConfig.check_interval or 120
+local PULSE_DURATION = 1 -- seconds
 
 -- State tracking
 local tierStates = {} -- Current on/off state for each tier
@@ -142,6 +143,7 @@ end
 local function updateTiers()
     local highestActiveTier = 0
     local tierResults = {}
+    local tiersToActivate = {}
 
     -- Check each tier (1-8)
     for tierNum = 1, 8 do
@@ -151,33 +153,40 @@ local function updateTiers()
             results = results
         }
 
-        local tierConfig = redstoneConfig.tiers[tierNum]
-
         if met then
             highestActiveTier = tierNum
-            -- Activate this tier
-            if tierConfig then
-                setRedstoneOutput(tierNum, REDSTONE_ON)
-            end
             tierStates[tierNum] = true
-        else
-            -- Deactivate this tier
+            local tierConfig = redstoneConfig.tiers[tierNum]
             if tierConfig then
-                setRedstoneOutput(tierNum, REDSTONE_OFF)
+                table.insert(tiersToActivate, tierNum)
             end
+        else
             tierStates[tierNum] = false
         end
     end
 
-    -- Update control 0 (main controller) - activates if any tier is active
+    -- Check control 0 (main controller) - activates if any tier is active
     local control0Config = redstoneConfig.tiers[0]
-    if control0Config then
-        if highestActiveTier > 0 then
-            setRedstoneOutput(0, REDSTONE_ON)
-            tierStates[0] = true
-        else
-            setRedstoneOutput(0, REDSTONE_OFF)
-            tierStates[0] = false
+    if control0Config and highestActiveTier > 0 then
+        tierStates[0] = true
+        table.insert(tiersToActivate, 0)
+    else
+        tierStates[0] = false
+    end
+
+    -- Pulse redstone: turn ON, wait 1 second, turn OFF
+    if #tiersToActivate > 0 then
+        -- Turn on all active tiers
+        for _, tierNum in ipairs(tiersToActivate) do
+            setRedstoneOutput(tierNum, REDSTONE_ON)
+        end
+
+        -- Wait for pulse duration
+        os.sleep(PULSE_DURATION)
+
+        -- Turn off all tiers
+        for _, tierNum in ipairs(tiersToActivate) do
+            setRedstoneOutput(tierNum, REDSTONE_OFF)
         end
     end
 
