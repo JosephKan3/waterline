@@ -4,6 +4,7 @@
 -- Usage: controller [debug]
 
 local component = require("component")
+local computer = require("computer")
 local event = require("event")
 local term = require("term")
 local shell = require("shell")
@@ -35,6 +36,7 @@ local COLOR_RED = 0xFF0000
 local COLOR_YELLOW = 0xFFFF00
 local COLOR_GRAY = 0x808080
 local COLOR_WHITE = 0xFFFFFF
+local COLOR_MAGENTA = 0xFF00FF
 
 -- Initialize AE2 module
 local function initAE2()
@@ -174,6 +176,9 @@ local function updateTiers()
         local tierConfig = redstoneConfig.tiers[highestActiveTier]
         local control0Config = redstoneConfig.tiers[0]
 
+        -- Beep to indicate cycle trigger
+        computer.beep(1000, 0.2)
+
         -- Turn ON highest tier and tier 0
         if tierConfig then
             setRedstoneOutput(highestActiveTier, REDSTONE_ON)
@@ -211,9 +216,9 @@ local function displayStatus(highestTier, tierResults)
     print("")
 
     -- Control 0 status
-    local ctrl0Status = tierStates[0] and "ON" or "OFF"
-    local ctrl0Color = tierStates[0] and COLOR_GREEN or COLOR_GRAY
-    log(string.format("Control 0 (Main): %s (Highest: Tier %d)", ctrl0Status, highestTier), ctrl0Color)
+    local ctrl0Status = tierStates[0] and "RUNNING" or "OFF"
+    local ctrl0Color = tierStates[0] and COLOR_MAGENTA or COLOR_GRAY
+    log(string.format("MAIN CONTROLLER: %s", ctrl0Status), ctrl0Color)
     print("")
 
     -- Display each tier
@@ -226,8 +231,22 @@ local function displayStatus(highestTier, tierResults)
         elseif not result or not result.results then
             log(string.format("Tier %d: No requirements defined", tierNum), COLOR_GRAY)
         else
-            local statusText = result.met and "ACTIVE" or "WAITING"
-            local statusColor = result.met and COLOR_GREEN or COLOR_YELLOW
+            local statusText
+            local statusColor
+
+            if tierNum == highestTier then
+                -- This is the running tier
+                statusText = "RUNNING"
+                statusColor = COLOR_MAGENTA
+            elseif result.met then
+                -- Has inputs but not the highest tier
+                statusText = "WAITING"
+                statusColor = COLOR_GREEN
+            else
+                -- Missing inputs
+                statusText = "UNAVAILABLE"
+                statusColor = COLOR_GRAY
+            end
 
             log(string.format("Tier %d: %s", tierNum, statusText), statusColor)
 
@@ -251,7 +270,16 @@ local function displayStatus(highestTier, tierResults)
     end
 
     print("")
-    log("Next check in " .. CHECK_INTERVAL .. " seconds...", COLOR_GRAY)
+end
+
+-- Display countdown on a single line (updates in place)
+local function displayCountdown(seconds)
+    local _, height = gpu.getResolution()
+    term.setCursor(1, height)
+    gpu.setForeground(COLOR_GRAY)
+    term.clearLine()
+    io.write(string.format("[%s] Next check in %d seconds... (Press Q to exit)", getFormattedTime(), seconds))
+    gpu.setForeground(COLOR_WHITE)
 end
 
 -- Shutdown - turn off all redstone outputs
@@ -298,8 +326,9 @@ local function main()
 
     -- Main loop
     while true do
+        local highestTier, results
         local success, err = pcall(function()
-            local highestTier, results = updateTiers()
+            highestTier, results = updateTiers()
             displayStatus(highestTier, results)
         end)
 
@@ -307,14 +336,19 @@ local function main()
             log("Error during update: " .. tostring(err), COLOR_RED)
         end
 
-        -- Wait for interval or Q key
-        local eventType, _, _, code = event.pull(CHECK_INTERVAL, "key_down")
-        if eventType == "key_down" and code == 0x10 then -- Q key
-            shutdown()
-            term.clear()
-            term.setCursor(1, 1)
-            print("Waterline Tier Controller stopped.")
-            return
+        -- Countdown loop
+        for remaining = CHECK_INTERVAL, 1, -1 do
+            displayCountdown(remaining)
+
+            -- Wait 1 second or check for Q key
+            local eventType, _, _, code = event.pull(1, "key_down")
+            if eventType == "key_down" and code == 0x10 then -- Q key
+                shutdown()
+                term.clear()
+                term.setCursor(1, 1)
+                print("Waterline Tier Controller stopped.")
+                return
+            end
         end
     end
 end
