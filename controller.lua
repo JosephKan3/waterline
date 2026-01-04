@@ -344,17 +344,17 @@ local function main()
 
             displayCountdown(remaining)
 
-            -- Wait up to 1 second or until next whole second boundary
-            local waitTime = math.min(1, endTime - computer.uptime())
-            if waitTime > 0 then
-                local eventType, _, _, code = event.pull(waitTime, "key_down")
-                if eventType == "key_down" and code == 0x10 then -- Q key
-                    shutdown()
-                    term.clear()
-                    term.setCursor(1, 1)
-                    print("Waterline Tier Controller stopped.")
-                    return
-                end
+            -- Sleep for 1 second using OS sleep
+            os.sleep(1)
+
+            -- Check for key press (non-blocking)
+            local eventType, _, _, code = event.pull(0, "key_down")
+            if eventType == "key_down" and code == 0x10 then -- Q key
+                shutdown()
+                term.clear()
+                term.setCursor(1, 1)
+                print("Waterline Tier Controller stopped.")
+                return
             end
         end
     end
