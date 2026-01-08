@@ -16,7 +16,9 @@ local args = {...}
 local DEBUG_MODE = args[1] == "debug"
 
 -- Load configurations
-local tiersConfig = require("tiers_config")
+local tiersConfigModule = require("tiers_config")
+local tiersConfig = tiersConfigModule.requirements
+local minimumsConfig = tiersConfigModule.minimums
 local redstoneConfig = require("redstone_config")
 local ae2 = require("src.AE2")
 
@@ -147,12 +149,40 @@ local function checkTier(tierNum)
     return allMet, results
 end
 
+-- Check a tier's output fluid level against its minimum threshold
+-- Returns: isBelowMinimum (boolean), currentAmount (number), minimumAmount (number)
+local function checkTierMinimum(tierNum)
+    local minConfig = minimumsConfig[tierNum]
+    if not minConfig or not minConfig.amount or minConfig.amount <= 0 then
+        return false, 0, 0
+    end
+
+    local currentAmount = ae2.getFluidAmount(minConfig.name)
+    local isBelowMinimum = currentAmount < minConfig.amount
+    return isBelowMinimum, currentAmount, minConfig.amount
+end
+
+-- Find all tiers that are below their minimum thresholds
+-- Returns: table of tier numbers that are below minimum (sorted ascending)
+local function findTiersBelowMinimum()
+    local belowMinimum = {}
+    for tierNum = 1, 8 do
+        local isBelowMin, _, _ = checkTierMinimum(tierNum)
+        if isBelowMin then
+            table.insert(belowMinimum, tierNum)
+        end
+    end
+    return belowMinimum
+end
+
 -- Main check and update cycle
 local function updateTiers()
-    local highestActiveTier = 0
+    local selectedTier = 0
     local tierResults = {}
+    local minimumStatus = {} -- Track minimum status for display
 
-    -- Check each tier (1-8) to find the highest ready tier
+    -- Check each tier (1-8) to find which are ready and their minimum status
+    local readyTiers = {}
     for tierNum = 1, 8 do
         local met, results = checkTier(tierNum)
         tierResults[tierNum] = {
@@ -161,27 +191,62 @@ local function updateTiers()
         }
 
         if met then
-            highestActiveTier = tierNum
+            readyTiers[tierNum] = true
             tierStates[tierNum] = true
         else
             tierStates[tierNum] = false
         end
+
+        -- Check minimum status for this tier
+        local isBelowMin, currentAmt, minAmt = checkTierMinimum(tierNum)
+        minimumStatus[tierNum] = {
+            belowMinimum = isBelowMin,
+            current = currentAmt,
+            minimum = minAmt,
+            name = minimumsConfig[tierNum] and minimumsConfig[tierNum].name or nil
+        }
+    end
+
+    -- Find tiers below minimum (sorted from lowest to highest)
+    local tiersBelowMin = findTiersBelowMinimum()
+
+    -- Priority logic:
+    -- 1. Check tiers below minimum, starting from lowest tier
+    -- 2. If a tier below minimum is ready (has prerequisites), run it
+    -- 3. If no tier below minimum can run, fall back to highest ready tier
+    local priorityTier = nil
+    for _, tierNum in ipairs(tiersBelowMin) do
+        if readyTiers[tierNum] then
+            priorityTier = tierNum
+            break -- Found the lowest tier below minimum that can run
+        end
+    end
+
+    if priorityTier then
+        selectedTier = priorityTier
+    else
+        -- Fall back to normal behavior: run highest ready tier
+        for tierNum = 1, 8 do
+            if readyTiers[tierNum] then
+                selectedTier = tierNum
+            end
+        end
     end
 
     -- Update control 0 state
-    tierStates[0] = highestActiveTier > 0
+    tierStates[0] = selectedTier > 0
 
-    -- Pulse redstone: only activate highest tier + tier 0
-    if highestActiveTier > 0 then
-        local tierConfig = redstoneConfig.tiers[highestActiveTier]
+    -- Pulse redstone: only activate selected tier + tier 0
+    if selectedTier > 0 then
+        local tierConfig = redstoneConfig.tiers[selectedTier]
         local control0Config = redstoneConfig.tiers[0]
 
         -- Beep to indicate cycle trigger
         computer.beep(1000, 0.2)
 
-        -- Turn ON highest tier and tier 0
+        -- Turn ON selected tier and tier 0
         if tierConfig then
-            setRedstoneOutput(highestActiveTier, REDSTONE_ON)
+            setRedstoneOutput(selectedTier, REDSTONE_ON)
         end
         if control0Config then
             setRedstoneOutput(0, REDSTONE_ON)
@@ -192,18 +257,18 @@ local function updateTiers()
 
         -- Turn OFF
         if tierConfig then
-            setRedstoneOutput(highestActiveTier, REDSTONE_OFF)
+            setRedstoneOutput(selectedTier, REDSTONE_OFF)
         end
         if control0Config then
             setRedstoneOutput(0, REDSTONE_OFF)
         end
     end
 
-    return highestActiveTier, tierResults
+    return selectedTier, tierResults, minimumStatus
 end
 
 -- Display status
-local function displayStatus(highestTier, tierResults)
+local function displayStatus(selectedTier, tierResults, minimumStatus)
     term.clear()
     term.setCursor(1, 1)
 
@@ -225,6 +290,7 @@ local function displayStatus(highestTier, tierResults)
     for tierNum = 1, 8 do
         local tierConfig = redstoneConfig.tiers[tierNum]
         local result = tierResults[tierNum]
+        local minStatus = minimumStatus and minimumStatus[tierNum]
 
         if not tierConfig then
             log(string.format("Tier %d: Not configured", tierNum), COLOR_GRAY)
@@ -234,12 +300,12 @@ local function displayStatus(highestTier, tierResults)
             local statusText
             local statusColor
 
-            if tierNum == highestTier then
+            if tierNum == selectedTier then
                 -- This is the running tier
                 statusText = "RUNNING"
                 statusColor = COLOR_MAGENTA
             elseif result.met then
-                -- Has inputs but not the highest tier
+                -- Has inputs but not the selected tier
                 statusText = "WAITING"
                 statusColor = COLOR_GREEN
             else
@@ -248,7 +314,33 @@ local function displayStatus(highestTier, tierResults)
                 statusColor = COLOR_GRAY
             end
 
-            log(string.format("Tier %d: %s", tierNum, statusText), statusColor)
+            -- Build minimum indicator if configured
+            local minIndicator = ""
+            if minStatus and minStatus.minimum > 0 then
+                local currentStr = ae2.formatNumber(minStatus.current)
+                local minStr = ae2.formatNumber(minStatus.minimum)
+                if minStatus.belowMinimum then
+                    minIndicator = string.format(" [LOW %s/%s]", currentStr, minStr)
+                else
+                    minIndicator = string.format(" [%s/%s]", currentStr, minStr)
+                end
+            end
+
+            -- Print tier line with colored minimum indicator
+            local old = gpu.getForeground()
+            io.write("[" .. getFormattedTime() .. "] ")
+            gpu.setForeground(statusColor)
+            io.write(string.format("Tier %d: %s", tierNum, statusText))
+            if minIndicator ~= "" then
+                if minStatus.belowMinimum then
+                    gpu.setForeground(COLOR_YELLOW)
+                else
+                    gpu.setForeground(COLOR_GREEN)
+                end
+                io.write(minIndicator)
+            end
+            gpu.setForeground(old)
+            print("")
 
             -- Show individual requirements
             for _, req in ipairs(result.results) do
@@ -257,7 +349,7 @@ local function displayStatus(highestTier, tierResults)
                 local requiredStr = ae2.formatNumber(req.required)
                 local icon = req.met and "[OK]" or "[!!]"
 
-                local old = gpu.getForeground()
+                old = gpu.getForeground()
                 io.write("         ")
                 gpu.setForeground(reqColor)
                 io.write(icon .. " ")
@@ -326,10 +418,10 @@ local function main()
 
     -- Main loop
     while true do
-        local highestTier, results
+        local selectedTier, results, minStatus
         local success, err = pcall(function()
-            highestTier, results = updateTiers()
-            displayStatus(highestTier, results)
+            selectedTier, results, minStatus = updateTiers()
+            displayStatus(selectedTier, results, minStatus)
         end)
 
         if not success then
